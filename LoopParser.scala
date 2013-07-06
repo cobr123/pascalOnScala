@@ -6,14 +6,16 @@
  * To change this template use File | Settings | File Templates.
  */
 
-import scala.util.parsing.combinator.RegexParsers
+import scala.util.parsing.combinator.JavaTokenParsers
 
-class LoopParser extends RegexParsers {
+class LoopParser extends JavaTokenParsers {
   override type Elem = Char
 
-  def identifier = stringLiteral
+  def keywords: Parser[Any] = "begin" | "end" | "for" | "do"
 
-  def integer = """(0|[1-9]\d*)""".r ^^ {
+  def identifier = not(keywords) ~ ident
+
+  def integer = wholeNumber ^^ {
     _.toInt
   }
 
@@ -27,14 +29,13 @@ class LoopParser extends RegexParsers {
   //    l => Block(l)
   //  }
 
-  //  def statement: Parser[pascal.Statement] = loop | block
 
   //pascal ebnf
-  def compoundStatement: Parser[Any] = "begin" ~> statements <~ "end"
+  def compoundStatement: Parser[Any] = "begin" ~ opt(statements) ~ "end"
 
-  def statements: Parser[Any] = (statement <~ ";") *
+  def statements: Parser[Any] = rep(statement ~ ";")
 
-  def statement: Parser[Any] = (label ~ ":" ~ unlabelledStatement) | unlabelledStatement
+  def statement: Parser[Any] = label ~ ":" ~ unlabelledStatement | unlabelledStatement
 
   def label: Parser[Any] = unsignedInteger
 
@@ -44,7 +45,7 @@ class LoopParser extends RegexParsers {
 
   def unsignedReal: Parser[Any] = NUM_INT
 
-  def NUM_INT: Parser[Any] = """-?(\d+(\.\d*)?|\d*\.\d+)([eE][+-]?\d+)?[fFdD]?""".r
+  def NUM_INT: Parser[Any] = floatingPointNumber
 
   def unlabelledStatement: Parser[Any] = simpleStatement | structuredStatement
 
@@ -52,17 +53,15 @@ class LoopParser extends RegexParsers {
 
   def conditionalStatement: Parser[Any] = ifStatement | caseStatement
 
-  def ifStatement: Parser[Any] = "if" ~ expression ~ "then" ~ statement ~ ("else" ~ statement) ?
+  def ifStatement: Parser[Any] = "if" ~ expression ~ "then" ~ statement ~ opt("else" ~ statement)
 
-  def caseStatement: Parser[Any] = "case" ~ expression ~ "of" ~ caseListElement ~ ((";" ~ caseListElement) *) ~ ((";" ~ "else" ~ statements) ?) ~ "end"
+  def caseStatement: Parser[Any] = "case" ~ expression ~ "of" ~ caseListElement ~ rep(";" ~ caseListElement) ~ ((";" ~ "else" ~ statements) ?) ~ "end"
 
   def caseListElement: Parser[Any] = constList ~ ":" ~ statement
 
-  def constList: Parser[Any] = constant ~ ("," ~ constant) *
+  def constList: Parser[Any] = constant ~ rep("," ~ constant)
 
-  def stringLiteral: Parser[String] = ("\"" + """([^"\p{Cntrl}\\]|\\[\\'"bfnrt]|\\u[a-fA-F0-9]{4})*""" + "\"").r
-
-  def constantDefinitionPart: Parser[Any] = "const" ~ constantDefinition ~ ((";" ~ constantDefinition) *) ~ ";"
+  def constantDefinitionPart: Parser[Any] = "const" ~ constantDefinition ~ rep(";" ~ constantDefinition) ~ ";"
 
   def constantDefinition: Parser[Any] = identifier ~ "=" ~ constant
 
@@ -88,13 +87,15 @@ class LoopParser extends RegexParsers {
 
   def withStatement: Parser[Any] = "with" ~ recordVariableList ~ "do" ~ statement
 
-  def recordVariableList: Parser[Any] = variable ~ ("," ~ variable) *
+  def recordVariableList: Parser[Any] = variable ~ rep("," ~ variable)
 
-  def simpleStatement: Parser[Any] = assignmentStatement | procedureStatement | gotoStatement
+  def simpleStatement: Parser[Any] = assignmentStatement | procedureStatement | gotoStatement | emptyStatement
 
-  def procedureStatement: Parser[Any] = identifier ~ ("(" ~> parameterList <~ ")") ?
+  def emptyStatement: Parser[Any] = """[(\r?\n)\s]+""".r
 
-  def parameterList: Parser[Any] = actualParameter ~ ("," ~ actualParameter) *
+  def procedureStatement: Parser[Any] = identifier ~ opt("(" ~ parameterList ~ ")")
+
+  def parameterList: Parser[Any] = actualParameter ~ rep("," ~ actualParameter)
 
   def actualParameter: Parser[Any] = expression
 
@@ -119,23 +120,23 @@ class LoopParser extends RegexParsers {
     */
   def variable: Parser[Any] = ("@" ~ identifier // AT is root of identifier; then other op becomes root
     | identifier
-    ) ~ (("[" ~ expression ~ (("," ~ expression) *) ~ "]") | ("(." ~ expression ~ (("," ~ expression) *) ~ ".)") | ("." ~ identifier) | "^") *
+    ) ~ rep("[" ~ expression ~ rep("," ~ expression) ~ "]" | "(." ~ expression ~ rep("," ~ expression) ~ ".)" | "." ~ identifier | "^")
 
-  def expression: Parser[Any] = simpleExpression ~ (("=" | "<>" | "<" | "<=" | ">=" | ">" | "in") ~ simpleExpression) *
+  def expression: Parser[Any] = simpleExpression ~ rep(("=" | "<>" | "<" | "<=" | ">=" | ">" | "in") ~ simpleExpression)
 
-  def simpleExpression: Parser[Any] = term ~ (("+" | "-" | "or") ~ term) *
+  def simpleExpression: Parser[Any] = term ~ rep(("+" | "-" | "or") ~ term)
 
-  def term: Parser[Any] = signedFactor ~ (("*" | "/" | "div" | "mod" | "and") ~ signedFactor) *
+  def term: Parser[Any] = signedFactor ~ rep(("*" | "/" | "div" | "mod" | "and") ~ signedFactor)
 
-  def signedFactor: Parser[Any] = (("+" | "-") ?) ~ factor
+  def signedFactor: Parser[Any] = opt("+" | "-") ~ factor
 
-  def factor: Parser[Any] = variable | ("(" ~ expression ~ ")") | functionDesignator | unsignedConstant | set | ("not" ~ factor)
+  def factor: Parser[Any] = variable | "(" ~ expression ~ ")" | functionDesignator | unsignedConstant | set | "not" ~ factor
 
   def set: Parser[Any] = "[" ~ elementList ~ "]" | "(." ~ elementList ~ ".)"
 
-  def elementList: Parser[Any] = element ~ ("," ~ element) *
+  def elementList: Parser[Any] = element ~ rep("," ~ element)
 
-  def element: Parser[Any] = expression ~ (".." ~ expression) ?
+  def element: Parser[Any] = expression ~ opt(".." ~ expression)
 
   def unsignedConstant: Parser[Any] = unsignedNumber | constantChr | string | "nil"
 
@@ -151,15 +152,12 @@ case class ProcCall(name: String, args: List[Statement]) extends Statement
 case class ForLoop(variable: String, lowerBound: Int, upperBound: Int, statement: Statement) extends Statement
 
 object TestLoopParser extends LoopParser with App {
-  parseAll(structuredStatement,
-    """
-      |begin
-      |for i := 0 to 10 do
-      |begin
-      | showMessage(avAttr[i]);
-      |end;
-      |end;
-    """.stripMargin) match {
+  //val cmd = """i := 0;"""
+  // val cmd = """showMessage(avAttr[i])"""
+  //  val cmd = """begin end;"""
+  val cmd = """begin for i := 0 to 10 do begin showMessage(avAttr[i]); end;end;"""
+  parseAll(statements,
+    cmd.stripMargin) match {
     case Success(lup, _) => println(lup)
     case x => println(x)
   }
